@@ -6,7 +6,66 @@ git commit -m "first commit"
 git branch -M main
 git remote add origin git@github.com:pseint/vp.git
 git push -u origin main
+
 …or push an existing repository from the command line
 git remote add origin git@github.com:pseint/vp.git
 git branch -M main
 git push -u origin main
+
+- ERROR GIT PULL SOLUCION:
+
+It looks like Git is protecting you from overwriting work. This **non-fast-forward** error happens because the version of the code on GitHub has commits that your local VPS environment doesn't have yet. 
+
+Think of it like a book where someone added a few pages while you weren't looking; Git won't let you publish your version until you include those new pages.
+
+---
+
+### The Fix: Integrating Remote Changes
+
+You have two main ways to handle this. Choose the one that fits your workflow:
+
+#### Option 1: The Standard Pull (Merge)
+This is the safest route. It fetches the changes from GitHub and merges them into your local code.
+
+1.  **Pull the changes:**
+    ```bash
+    git pull origin main
+    ```
+2.  **Handle Conflicts:** If you and the remote version edited the exact same line, Git will ask you to fix it. If not, it will just create a "Merge commit."
+3.  **Push again:**
+    ```bash
+    git push -u origin main
+    ```
+
+#### Option 2: The Clean History (Rebase)
+If you want your commit history to look like a straight line without "Merge branch..." messages, use rebase. This puts your local changes "on top" of the remote changes.
+
+1.  **Pull with rebase:**
+    ```bash
+    git pull --rebase origin main
+    ```
+2.  **Push your changes:**
+    ```bash
+    git push -u origin main
+    ```
+
+
+
+---
+
+### The "Nuclear" Option (Use with Caution)
+If you are **100% sure** that your local code is the only version that matters and you want to delete whatever is on GitHub, you can force the push. 
+
+> **Warning:** This will permanently delete any commits on GitHub that aren't on your local machine. Use this only if you are the sole developer or know exactly why the histories diverged.
+
+```bash
+git push -u origin main --force
+```
+
+### Pro-Tip
+If you get a message about "divergent branches" when pulling, you can set your default behavior to keep things simple:
+```bash
+git config pull.rebase false  # For standard merging
+# OR
+git config pull.rebase true   # For cleaner rebasing
+```
