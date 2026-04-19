@@ -1,19 +1,19 @@
 # =============================================================
 # .gitignore — Oracle VPS Hosting
 # =============================================================
-
-# ── Secretos — NUNCA subir al repositorio ─────────────────────
-.env
-traefik/dynamic/.htpasswd
-traefik/acme/
+#
+## ── Secretos — NUNCA subir al repositorio ─────────────────────
+##.env
+#traefik/dynamic/.htpasswd
+#traefik/acme/
 traefik/acme/*.json
 
-# ── Logs ──────────────────────────────────────────────────────
-logs/
+## ── Logs ──────────────────────────────────────────────────────
+#logs/
 *.log
 
-# ── Datos de sitios ───────────────────────────────────────────
-data/
+## ── Datos de sitios ───────────────────────────────────────────
+#data/
 nginx/sites-enabled/
 # Mantener el directorio pero ignorar su contenido:
 !nginx/sites-enabled/.gitkeep
@@ -24,16 +24,16 @@ nginx/sites-enabled/
 dns/pdns.conf
 
 # ── PHP ini con Redis password ────────────────────────────────
-# php.ini puede contener passwords tras setup-env.sh
+## php.ini puede contener passwords tras setup-env.sh
 php/php.ini
 
 # ── Redis con password ────────────────────────────────────────
 redis/redis.conf
-
+#
 # ── MariaDB init con passwords ────────────────────────────────
 mariadb/init/01-init.sql
 
-# ── Override de desarrollo ────────────────────────────────────
+## ── Override de desarrollo ────────────────────────────────────
 docker-compose.override.yml
 
 # ── OS y editores ─────────────────────────────────────────────
@@ -60,7 +60,7 @@ __pycache__/
 *.backup
 *.old
 *.orig
-/tmp/
+#/tmp/
 
 # ── Archivo generado por restore.sh ─────────────────────────
 .env.restored
