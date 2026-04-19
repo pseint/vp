@@ -1,0 +1,209 @@
+# =============================================================
+# TRAEFIK — Middlewares dinámicos v4 (fix v22: tls en root level)
+# =============================================================
+
+http:
+  middlewares:
+
+    # Redirección HTTP → HTTPS
+    redirect-to-https:
+      redirectScheme:
+        scheme: https
+        permanent: true
+
+    # Autenticación básica (Traefik dashboard + SFTPGo WebAdmin)
+    auth:
+      basicAuth:
+        usersFile: /etc/traefik/dynamic/.htpasswd
+        realm: "Hosting Admin"
+        removeHeader: true
+
+    # Headers de seguridad para sitios públicos (OWASP)
+    security-headers:
+      headers:
+        accessControlAllowMethods:
+          - GET
+          - OPTIONS
+          - PUT
+          - POST
+          - DELETE
+        accessControlMaxAge: 100
+        hostsProxyHeaders:
+          - "X-Forwarded-Host"
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          # BUG FIX v19: X-Robots-Tag removido de security-headers global.
+          # Aplicarlo aquí bloqueaba la indexación en buscadores de TODOS
+          # los sitios de clientes (Google ignoraba todo el hosting).
+          # Se mantiene solo en admin-chain para paneles de administración.
+          server: ""
+          X-Powered-By: ""
+        referrerPolicy: "strict-origin-when-cross-origin"
+        contentTypeNosniff: true
+        browserXssFilter: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        frameDeny: true
+        contentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; frame-ancestors 'none';"
+        permissionsPolicy: "camera=(), microphone=(), geolocation=()"
+
+    # BUG FIX #4: Portainer usa iframes internamente — NO puede usar frameDeny:true
+    # También necesita CSP más permisivo para su UI
+    portainer-headers:
+      headers:
+        hostsProxyHeaders:
+          - "X-Forwarded-Host"
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          server: ""
+          X-Powered-By: ""
+        referrerPolicy: "strict-origin-when-cross-origin"
+        contentTypeNosniff: true
+        browserXssFilter: true
+        forceSTSHeader: true
+        stsIncludeSubdomains: true
+        stsPreload: true
+        stsSeconds: 31536000
+        # frameDeny: false  ← NO agregamos frameDeny para que los iframes de Portainer funcionen
+
+    # NOTA: El transport insecureSkipVerify para Portainer está en
+    # serversTransports.insecure-transport (más abajo) — no es un middleware
+
+    # Rate limiting básico (protección DDoS)
+    rate-limit:
+      rateLimit:
+        average: 100
+        period: 1s
+        burst: 200
+
+    # Rate limiting estricto para APIs y paneles admin
+    rate-limit-api:
+      rateLimit:
+        average: 30
+        period: 1s
+        burst: 50
+
+    # Compresión de respuestas
+    compress:
+      compress:
+        excludedContentTypes:
+          - text/event-stream
+
+    # IP whitelist para servicios internos
+    ip-whitelist-admin:
+      ipAllowList:
+        sourceRange:
+          - "127.0.0.1/32"
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+
+    # Cadena para sitios públicos
+    public-chain:
+      chain:
+        middlewares:
+          - security-headers
+          - compress
+          - rate-limit
+
+    # Cadena para paneles de administración
+    admin-chain:
+      chain:
+        middlewares:
+          - security-headers
+          - rate-limit-api
+          - auth
+          - admin-noindex
+
+    # Bloquear indexación de paneles admin (Traefik, Portainer, PDNS, SFTPGo)
+    # NO debe aplicarse a sitios de clientes
+    admin-noindex:
+      headers:
+        customResponseHeaders:
+          X-Robots-Tag: "none,noarchive,nosnippet,notranslate,noimageindex"
+
+    # CORS para APIs
+    cors-headers:
+      headers:
+        accessControlAllowOriginList:
+          - "*"
+        accessControlAllowHeaders:
+          - "*"
+        accessControlAllowMethods:
+          - "GET"
+          - "POST"
+          - "PUT"
+          - "DELETE"
+          - "OPTIONS"
+        addVaryHeader: true
+
+    # Buffer para uploads grandes (WordPress media, etc.)
+    buffering-upload:
+      buffering:
+        maxRequestBodyBytes: 104857600  # 100MB
+        memRequestBodyBytes: 2097152    # 2MB en memoria
+        maxResponseBodyBytes: 0
+        retryExpression: "IsNetworkError() && Attempts() <= 3"
+
+    # Strip prefix para APIs
+    strip-prefix-api:
+      stripPrefix:
+        prefixes:
+          - "/api"
+
+    # Eliminar header "server" y cabeceras de debug en todas las respuestas
+    strip-debug-headers:
+      headers:
+        customResponseHeaders:
+          X-Powered-By: ""
+          X-AspNet-Version: ""
+          X-AspNetMvc-Version: ""
+          server: ""
+
+    # Cadena para páginas de error (sin auth, sin rate limit estricto)
+    error-chain:
+      chain:
+        middlewares:
+          - security-headers
+          - compress
+
+  # ── ServersTransport — para backends con HTTPS auto-firmado ──
+  serversTransports:
+    # BUG FIX #4b: Portainer usa certificado auto-firmado interno
+    insecure-transport:
+      insecureSkipVerify: true
+
+# =============================================================
+# FIX v22: tls debe estar en el ROOT LEVEL del archivo dinámico,
+# NO bajo http: — Traefik v3 rechaza tls: anidado en http:
+# y lanza: "field not found, node: tls"
+# =============================================================
+tls:
+  options:
+    default:
+      minVersion: VersionTLS12
+      sniStrict: true
+      # BUG FIX v21: Cipher suites explícitos — sin esto Traefik incluía ciphers CBC
+      # débiles (AES128-SHA, AES256-SHA) en TLS 1.2. Solo ECDHE+AESGCM/ChaCha20.
+      cipherSuites:
+        - TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256
+        - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384
+        - TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
+        - TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
+      # curvePreferences: excluir P-521 (muy lento en ARM64 Ampere sin aceleración HW)
+      curvePreferences:
+        - CurveP256
+        - CurveP384
+        - X25519
+    modern:
+      minVersion: VersionTLS13
+      # TLS 1.3 no permite seleccionar cipher suites — el protocolo los impone
+      curvePreferences:
+        - CurveP256
+        - X25519

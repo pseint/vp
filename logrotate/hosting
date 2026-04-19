@@ -1,0 +1,80 @@
+# =============================================================
+# LOGROTATE — Nginx, Traefik, Backup y Monitor
+# Instalar: install.sh lo copia con rutas correctas
+# Las rutas /opt/hosting se reemplazan por INSTALL_DIR real
+# =============================================================
+
+# ── Logs de Nginx ─────────────────────────────────────────────
+/opt/hosting/logs/nginx/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+    sharedscripts
+    postrotate
+        docker exec nginx nginx -s reopen 2>/dev/null || true
+    endscript
+}
+
+# ── Logs de Traefik ───────────────────────────────────────────
+/opt/hosting/logs/traefik/*.log {
+    daily
+    missingok
+    rotate 14
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+    # FIX: copytruncate evita reiniciar Traefik (que causa ~1s de downtime para TODOS los sitios)
+    # Traefik no implementa SIGUSR1 para reabrir logs — copytruncate copia+trunca sin signal
+    # Pequeña ventana de pérdida de datos (líneas escritas entre copia y truncado) es aceptable en logs
+    copytruncate
+}
+
+# ── Logs de SFTPGo ───────────────────────────────────────────
+# BUG FIX v14: faltaba rotación de logs SFTPGo → podía crecer sin límite
+/opt/hosting/logs/sftpgo/*.log {
+    daily
+    missingok
+    rotate 7
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+    copytruncate
+}
+
+# ── Logs de Backup ────────────────────────────────────────────
+/opt/hosting/logs/backup/*.log {
+    weekly
+    missingok
+    rotate 8
+    compress
+    delaycompress
+    notifempty
+    create 0640 root root
+}
+
+# ── Logs del Monitor ─────────────────────────────────────────
+/opt/hosting/logs/monitor.log {
+    weekly
+    missingok
+    rotate 4
+    compress
+    notifempty
+    create 0640 root root
+    copytruncate
+}
+
+# ── Logs SSL check ────────────────────────────────────────────
+/opt/hosting/logs/ssl-check.log {
+    monthly
+    missingok
+    rotate 3
+    compress
+    notifempty
+    create 0640 root root
+}

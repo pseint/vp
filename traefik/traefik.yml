@@ -1,0 +1,146 @@
+# =============================================================
+# TRAEFIK v3 — Configuración principal v19
+# =============================================================
+
+# ── API y Dashboard ─────────────────────────────────────────
+api:
+  dashboard: true
+  debug: true
+  insecure: true
+
+# ── Proveedores ──────────────────────────────────────────────
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: true
+    network: hosting-net
+    watch: true
+  # FIX CRÍTICO v10: file: debe estar bajo providers:, NO bajo serversTransport:
+  # Sin esto, middlewares.yml (auth, security-headers, rate-limit) NUNCA se carga
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+# ── Headers de reenvío (Real IP desde Traefik a Nginx) ───────
+# Tiempos de conexión globales a backends
+serversTransport:
+  forwardingTimeouts:
+    dialTimeout: 30s
+    # BUG FIX v15: 30s era demasiado corto para WordPress/WooCommerce pesado.
+    # Páginas con muchos plugins, generación de PDF, imports WooCommerce pueden
+    # tardar 60-120s. Traefik devolvería 504 Gateway Timeout prematuramente.
+    responseHeaderTimeout: 120s
+
+# ── Entrypoints ──────────────────────────────────────────────
+entryPoints:
+  # HTTP — redirige a HTTPS (ping NO usa este entrypoint)
+  web:
+    address: ":80"
+    forwardedHeaders:
+      trustedIPs:
+        - "127.0.0.1/32"
+        - "172.20.0.0/16"
+        - "172.21.0.0/24"
+        - "10.0.0.0/8"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  # HTTPS — TLS + HTTP/3 (QUIC)
+  websecure:
+    address: ":443"
+    http3:
+      advertisedPort: 443
+    forwardedHeaders:
+      trustedIPs:
+        - "127.0.0.1/32"
+        - "172.20.0.0/16"
+        - "172.21.0.0/24"
+        - "10.0.0.0/8"
+    # BUG FIX v14: security-headers se movió a cada router individualmente.
+    # Tenerlo aquí aplicaba frameDeny:true GLOBALMENTE (incluyendo Portainer),
+    # sobreescribiendo portainer-headers@file porque los entrypoint middlewares
+    # se aplican DESPUÉS de los router middlewares en la cadena de respuesta.
+    # Ahora cada router (nginx, traefik, pdns-admin, sftpgo) añade security-headers@file
+    # en sus labels; Portainer sigue usando portainer-headers@file sin conflicto.
+
+  # Dashboard interno — usado por ping healthcheck
+  # BUG FIX #3: ping.entryPoint debe ser "traefik" (8080), no "web" (que redirige a HTTPS)
+  traefik:
+    address: ":8080"
+
+# ── Certificados SSL ─────────────────────────────────────────
+certificatesResolvers:
+
+  # Resolver estándar (HTTP Challenge — por dominio individual)
+  letsencrypt:
+    acme:
+      email: "${ACME_EMAIL}"
+      storage: /etc/traefik/acme/acme.json
+      httpChallenge:
+        entryPoint: web
+
+  # Resolver wildcard (DNS Challenge con Cloudflare — Feature #2)
+  letsencrypt-wildcard:
+    acme:
+      email: "${ACME_EMAIL}"
+      storage: /etc/traefik/acme/acme-wildcard.json
+      dnsChallenge:
+        provider: cloudflare
+        delayBeforeCheck: 30
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
+
+  # Staging — pruebas (evita rate limits de Let's Encrypt)
+  letsencrypt-staging:
+    acme:
+      email: "${ACME_EMAIL}"
+      storage: /etc/traefik/acme/acme-staging.json
+      caServer: "https://acme-staging-v02.api.letsencrypt.org/directory"
+      httpChallenge:
+        entryPoint: web
+
+# ── Logs ─────────────────────────────────────────────────────
+log:
+  level: DEBUG
+  filePath: /var/log/traefik/traefik.log
+  format: json
+
+# ── Access Logs ───────────────────────────────────────────────
+accessLog:
+  filePath: /var/log/traefik/access.log
+  format: json
+  bufferingSize: 100
+  filters:
+    statusCodes:
+      - "200-599"
+    retryAttempts: true
+    minDuration: "50ms"
+  fields:
+    defaultMode: drop
+    names:
+      ClientHost: keep
+      RequestMethod: keep
+      RequestPath: keep
+      DownstreamStatus: keep
+      Duration: keep
+      RouterName: keep
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+        Authorization: redact
+        X-Forwarded-For: keep
+
+# ── Ping (health check interno) ───────────────────────────────
+ping:
+  entryPoint: traefik
+
+# NOTA v19: La configuración TLS (minVersion, cipherSuites, curvePreferences) está en
+# traefik/dynamic/middlewares.yml bajo tls.options.default — que es el lugar correcto
+# para Traefik v3 (dynamic config). Definirla aquí en static config no tiene efecto
+# y genera warnings en traefik.log.

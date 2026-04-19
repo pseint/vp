@@ -1,0 +1,11 @@
+# Acelera el build ignorando archivos innecesarios del contexto PHP
+*.md
+*.log
+*.bak
+.git
+.gitignore
+.env
+__pycache__
+*.pyc
+.DS_Store
+Thumbs.db

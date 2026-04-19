@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Error del servidor</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:system-ui,-apple-system,sans-serif;background:#0f172a;
+         color:#e2e8f0;min-height:100vh;display:flex;align-items:center;
+         justify-content:center;padding:2rem}
+    .card{text-align:center;padding:3rem 2rem;max-width:480px;width:100%}
+    .icon{font-size:4rem;margin-bottom:1rem}
+    .code{font-size:5rem;font-weight:800;line-height:1;
+          background:linear-gradient(135deg,#f87171,#fb923c);
+          -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+          margin-bottom:1rem}
+    h1{font-size:1.4rem;font-weight:600;color:#f1f5f9;margin-bottom:.75rem}
+    p{color:#94a3b8;font-size:.9375rem;line-height:1.6}
+    .retry{display:inline-block;margin-top:2rem;padding:.75rem 1.75rem;
+           background:#dc2626;color:#fff;text-decoration:none;border-radius:.5rem;
+           font-weight:500;cursor:pointer;border:none;font-size:1rem;
+           transition:background .2s}
+    .retry:hover{background:#b91c1c}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="code">5xx</div>
+    <h1>Error del servidor</h1>
+    <p>Algo salió mal en el servidor. Intenta de nuevo en unos momentos.</p>
+    <button class="retry" onclick="location.reload()">↻ Reintentar</button>
+  </div>
+</body>
+</html>

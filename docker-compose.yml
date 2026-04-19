@@ -1,0 +1,481 @@
+# =============================================================
+# ORACLE VPS FREE — DOCKER COMPOSE STACK COMPLETO v21
+# Arquitectura: ARM64 (aarch64) — Ubuntu 24.04
+# Imágenes: 100% compatibles con linux/arm64
+# =============================================================
+
+name: hosting
+
+networks:
+  hosting-net:
+    name: hosting-net
+    external: true
+  dns-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.21.0.0/24
+
+volumes:
+  traefik-acme:
+  pdns-db:
+  mariadb-data:
+  redis-data:
+  portainer-data:
+  sites-data:
+  nginx-cache:
+  sftpgo-data:
+
+# ─────────────────────────────────────────────────────────────
+# LOGGING GLOBAL — limitar json-file para no llenar el disco
+# BUG FIX: debe estar al nivel RAÍZ del YAML (no bajo services:)
+# 20MB × 5 archivos = 100MB máx por servicio
+# ─────────────────────────────────────────────────────────────
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+
+  # ═══════════════════════════════════════════════════════════
+  # TRAEFIK — Reverse Proxy + SSL automático (Let's Encrypt)
+  # ═══════════════════════════════════════════════════════════
+  traefik:
+    image: traefik:v3.3
+    container_name: traefik
+    restart: unless-stopped
+    logging: *default-logging
+    user: "0:988"
+  # command:
+  #   - "--api.dashboard=true"
+  #   - "--api.insecure=true"
+  #   - "--providers.docker=true"
+  #   - "--providers.docker.exposedbydefault=false"
+  #   - "--entrypoints.web.address=:80"
+  #   - "--entrypoints.websecure.address=:443"
+    networks:
+      - hosting-net
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+      - traefik-acme:/etc/traefik/acme
+      - ./logs/traefik:/var/log/traefik
+    environment:
+      - TZ=${TZ:-America/Lima}
+      # FIX CRÍTICO: ACME_EMAIL debe estar en el env del contenedor
+      # traefik.yml usa ${ACME_EMAIL} en los 3 resolvers ACME — sin esto, email vacío → sin alertas LE
+      - ACME_EMAIL=${ACME_EMAIL}
+      # Para wildcard SSL con Cloudflare DNS Challenge
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN:-}
+      - DOCKER_API_VERSION=1.40
+    deploy:
+      resources:
+        limits:
+          memory: ${TRAEFIK_MEM:-128m}
+          cpus: "${TRAEFIK_CPU:-0.10}"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.traefik.rule=Host(`traefik.${DOMAIN}`)"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.service=api@internal"
+      - "traefik.http.routers.traefik.middlewares=auth@file,security-headers@file,admin-noindex@file"
+    healthcheck:
+      # BUG FIX #3: ping debe usar entrypoint traefik (8080), no web (80 redirige a HTTPS)
+      test: ["CMD", "traefik", "healthcheck", "--ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ═══════════════════════════════════════════════════════════
+  # POWERDNS — Servidor DNS autoritativo
+  # ═══════════════════════════════════════════════════════════
+  powerdns:
+    image: powerdns/pdns-auth-49:4.9.4
+    container_name: powerdns
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+      - dns-net
+    ports:
+      - "53:53/tcp"
+      - "53:53/udp"
+      - "127.0.0.1:8053:8081"
+    volumes:
+      - ./dns/pdns.conf:/etc/powerdns/pdns.conf:ro
+    environment:
+      # Configuración de la API y Webserver
+      - PDNS_api=yes
+      - PDNS_api_key=${PDNS_API_KEY}
+      - PDNS_webserver=yes
+      - PDNS_webserver_address=0.0.0.0
+      - PDNS_webserver_allow_from=0.0.0.0/0
+      - PDNS_webserver_port=8081
+      # Conexión a MariaDB (Backend gmysql)
+      - PDNS_launch=gmysql
+      - PDNS_gmysql_host=mariadb
+      - PDNS_gmysql_port=3306
+      - PDNS_gmysql_dbname=${PDNS_DB_NAME:-powerdns}
+      - PDNS_gmysql_user=${PDNS_DB_USER:-pdns}
+      - PDNS_gmysql_password=${PDNS_DB_PASS}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${PDNS_MEM:-128m}
+          cpus: "${PDNS_CPU:-0.10}"
+    healthcheck:
+      # Ahora el ping funcionará porque la API estará activa
+      test: ["CMD-SHELL", "pdns_control list-zones"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ═══════════════════════════════════════════════════════════
+  # POWERDNS ADMIN — Interfaz web para gestionar DNS
+  # ═══════════════════════════════════════════════════════════
+  pdns-admin:
+    image: powerdnsadmin/pda-legacy:latest
+    container_name: pdns-admin
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+    expose:
+      - "80"
+    environment:
+      # Flask SECRET_KEY — debe ser diferente al API key de PowerDNS
+      - SECRET_KEY=${PDNS_ADMIN_SECRET_KEY}
+      - SQLALCHEMY_DATABASE_URI=mysql://${PDNS_ADMIN_DB_USER}:${PDNS_ADMIN_DB_PASS}@mariadb/${PDNS_ADMIN_DB_NAME}
+      - GUNICORN_TIMEOUT=60
+      - GUNICORN_WORKERS=2
+      - GUNICORN_LOGLEVEL=WARNING
+      - PDNS_ADMIN_LOG_LEVEL=WARNING
+      - PDNS_API_KEY=${PDNS_API_KEY}
+      - PDNS_API_URL=http://powerdns:8081
+      - PDNS_VERSION=4.9
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      powerdns:
+        # BUG FIX v15: service_healthy en lugar de service_started — pdns-admin
+        # intentaba conectar antes de que PowerDNS terminara de iniciar su DB
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: ${PDNS_ADMIN_MEM:-256m}
+          cpus: "${PDNS_ADMIN_CPU:-0.20}"
+    healthcheck:
+      disable: true
+      #test: ["CMD", "wget", "-q", "--spider", "http://localhost/"]
+      #interval: 30s
+      #timeout: 10s
+      #retries: 5
+      #start_period: 60s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.pdns-admin.rule=Host(`dns.cloudservicesai.eu.org`)"
+      - "traefik.http.routers.pdns-admin.entrypoints=web"
+      - "traefik.docker.network=hosting-net"
+     #- "traefik.http.routers.pdns-admin.tls=true"
+     #- "traefik.http.routers.pdns-admin.middlewares=security-headers@file,rate-limit-api@file"
+      - "traefik.http.services.pdns-admin.loadbalancer.server.port=80"
+     #- "traefik.enable=true"
+     #- "traefik.http.routers.pdns-admin.rule=Host(`dns.${DOMAIN}`)"
+     #- "traefik.http.routers.pdns-admin.entrypoints=websecure"
+     #- "traefik.http.routers.pdns-admin.tls.certresolver=letsencrypt"
+      # BUG FIX v15: añadir rate-limit-api@file — sin esto el panel DNS no tiene
+      # protección brute-force (cualquier IP puede hacer fuerza bruta sin límite)
+     #- "traefik.http.routers.pdns-admin.middlewares=security-headers@file,rate-limit-api@file,admin-noindex@file"
+     #- "traefik.http.services.pdns-admin.loadbalancer.server.port=80"
+
+  # ═══════════════════════════════════════════════════════════
+  # NGINX — Servidor web
+  # ═══════════════════════════════════════════════════════════
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: nginx
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+    expose:
+      - "80"
+      - "443"
+    volumes:
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - sites-data:/var/www/html
+      # BUG FIX #11: nginx/html → /var/www/html/default (default site + error pages)
+      - ./nginx/html:/var/www/html/default:ro
+      - ./logs/nginx:/var/log/nginx
+      - nginx-cache:/var/cache/nginx/fastcgi
+      - ./nginx/sites-enabled:/etc/nginx/sites-enabled:ro
+      # FIX v20: snippets/ montado para que include /etc/nginx/snippets/ funcione
+      - ./nginx/sites-available:/etc/nginx/sites-available:ro
+      - ./nginx/snippets:/etc/nginx/snippets:ro
+    environment:
+      - TZ=${TZ:-America/Lima}
+    depends_on:
+      - php-fpm
+    deploy:
+      resources:
+        limits:
+          memory: ${NGINX_MEM:-256m}
+          cpus: "${NGINX_CPU:-0.30}"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.nginx-http.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.nginx-http.entrypoints=web"
+      - "traefik.http.routers.nginx-http.middlewares=redirect-to-https@file"
+      - "traefik.http.routers.nginx-http.priority=1"
+      - "traefik.http.routers.nginx-https.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.nginx-https.entrypoints=websecure"
+      - "traefik.http.routers.nginx-https.tls=true"
+      - "traefik.http.routers.nginx-https.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.nginx-https.middlewares=security-headers@file"
+      - "traefik.http.routers.nginx-https.priority=1"
+      - "traefik.http.services.nginx.loadbalancer.server.port=80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/nginx-health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s  # FIX v16: tiempo para que nginx cargue configs antes del 1er check
+
+  # ═══════════════════════════════════════════════════════════
+  # PHP-FPM — Procesador PHP
+  # ═══════════════════════════════════════════════════════════
+  php-fpm:
+    build:
+      context: ./php
+      dockerfile: Dockerfile
+      args:
+        - PHP_VERSION=8.3
+    image: hosting-php:8.3
+    container_name: php-fpm
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+    expose:
+      - "9000"
+    volumes:
+      - sites-data:/var/www/html
+      - ./php/php.ini:/usr/local/etc/php/php.ini:ro
+      - ./php/www.conf:/usr/local/etc/php-fpm.d/www.conf:ro
+    environment:
+      - TZ=${TZ:-America/Lima}
+      # REDIS_PASS: necesario para que php.ini conecte a Redis (sesiones)
+      - REDIS_PASS=${REDIS_PASS}
+      - DB_HOST=mariadb
+      - DB_USER=${DB_USER:-webuser}
+      - DB_PASS=${DB_PASS}
+    deploy:
+      resources:
+        limits:
+          memory: ${PHP_MEM:-512m}
+          cpus: "${PHP_CPU:-0.50}"
+    healthcheck:
+      test: ["CMD-SHELL", "SCRIPT_NAME=/fpm-ping SCRIPT_FILENAME=/fpm-ping REQUEST_METHOD=GET cgi-fcgi -bind -connect 127.0.0.1:9000 2>/dev/null | grep -q pong || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ═══════════════════════════════════════════════════════════
+  # MARIADB — Base de datos SQL
+  # ═══════════════════════════════════════════════════════════
+  mariadb:
+    image: mariadb:11.4
+    container_name: mariadb
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+    expose:
+      - "3306"
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./mariadb/conf.d:/etc/mysql/conf.d:ro
+      - ./mariadb/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      - MARIADB_ROOT_PASSWORD=${DB_ROOT_PASS}
+      - MARIADB_DATABASE=${PDNS_DB_NAME:-powerdns}
+      - MARIADB_USER=${PDNS_DB_USER:-pdns}
+      - MARIADB_PASSWORD=${PDNS_DB_PASS}
+      - TZ=${TZ:-America/Lima}
+    deploy:
+      resources:
+        limits:
+          memory: ${MARIADB_MEM:-512m}
+          cpus: "${MARIADB_CPU:-0.50}"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ═══════════════════════════════════════════════════════════
+  # REDIS — Cache y sesiones
+  # ═══════════════════════════════════════════════════════════
+  redis:
+    image: redis:7.4-alpine
+    container_name: redis
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+    expose:
+      - "6379"
+    volumes:
+      - redis-data:/data
+    # Forzamos la contraseña desde el comando para asegurar compatibilidad con el healthcheck
+    command: redis-server --requirepass ${REDIS_PASS}
+    environment:
+      - TZ=${TZ:-America/Lima}
+      - REDIS_PASS=${REDIS_PASS}
+    deploy:
+      resources:
+        limits:
+          memory: ${REDIS_MEM:-128m}
+          cpus: "${REDIS_CPU:-0.10}"
+    healthcheck:
+      # El uso de $$ es para que Docker no lo confunda con una variable del host
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASS\" ping | grep -q PONG"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ═══════════════════════════════════════════════════════════
+  # PORTAINER CE — Gestión visual de Docker
+  # ═══════════════════════════════════════════════════════════
+  portainer:
+    image: portainer/portainer-ce:2.21.4
+    container_name: portainer
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+    ports:
+      - "9443:9443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - portainer-data:/data
+    deploy:
+      resources:
+        limits:
+          memory: ${PORTAINER_MEM:-128m}
+          cpus: "${PORTAINER_CPU:-0.10}"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--no-check-certificate", "--spider", "https://localhost:9443/api/system/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.portainer.rule=Host(`portainer.${DOMAIN}`)"
+      - "traefik.http.routers.portainer.entrypoints=websecure"
+      - "traefik.http.routers.portainer.tls.certresolver=letsencrypt"
+      - "traefik.http.services.portainer.loadbalancer.server.port=9443"
+      - "traefik.http.services.portainer.loadbalancer.server.scheme=https"
+      # BUG FIX #5: Portainer usa iframes — no usar security-headers (frameDeny:true)
+      - "traefik.http.routers.portainer.middlewares=portainer-headers@file,rate-limit-api@file"
+      # BUG FIX #5b: Certificado auto-firmado de Portainer → insecureSkipVerify
+      - "traefik.http.services.portainer.loadbalancer.passhostheader=true"
+      # BUG FIX #10: insecureSkipVerify para cert auto-firmado de Portainer
+      - "traefik.http.services.portainer.loadbalancer.serverstransport=insecure-transport@file"
+
+  # ═══════════════════════════════════════════════════════════
+  # SFTPGO — Servidor SFTP con cuotas por cliente (Feature #1)
+  # Cada cliente accede solo a su docroot
+  # Perfil: activa con --profile sftp
+  # ═══════════════════════════════════════════════════════════
+  sftpgo:
+    image: drakkan/sftpgo:v2.6.4-alpine  # pin: v2-alpine = :latest que puede romper
+    container_name: sftpgo
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+    ports:
+      - "2022:2022"  # SFTP
+    expose:
+      - "8090"       # WebAdmin
+    volumes:
+      - sftpgo-data:/var/lib/sftpgo
+      - sites-data:/var/www/html
+      # Para activar fail2ban jail [sftpgo], montar logs:
+      - ./logs/sftpgo:/var/lib/sftpgo/logs
+    depends_on:
+      - nginx
+    environment:
+      - TZ=${TZ:-America/Lima}
+      - SFTPGO_HTTPD__BINDINGS__0__PORT=8090
+      - SFTPGO_HTTPD__BINDINGS__0__ADDRESS=0.0.0.0
+      - SFTPGO_SFTPD__BINDINGS__0__PORT=2022
+      - SFTPGO_DATA_PROVIDER__DRIVER=bolt
+      - SFTPGO_SFTPD__BANNER=SFTP Hosting Server
+      - SFTPGO_LOG_FILE_PATH=/var/lib/sftpgo/logs/sftpgo.log
+      - SFTPGO_LOG_LEVEL=INFO
+    deploy:
+      resources:
+        limits:
+          memory: ${SFTPGO_MEM:-128m}
+          cpus: "${SFTPGO_CPU:-0.10}"
+    healthcheck:
+      # FIX: SFTPGo expone /api/v2/version en el puerto WebAdmin (8090)
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8090/api/v2/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.sftpgo.rule=Host(`sftp.${DOMAIN}`)"
+      - "traefik.http.routers.sftpgo.entrypoints=websecure"
+      - "traefik.http.routers.sftpgo.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.sftpgo.middlewares=auth@file,security-headers@file,admin-noindex@file"
+      - "traefik.http.services.sftpgo.loadbalancer.server.port=8090"
+    profiles:
+      - sftp
+
+  # ═══════════════════════════════════════════════════════════
+  # WHOAMI — Servicio de prueba / verificación
+  # ═══════════════════════════════════════════════════════════
+  whoami:
+    image: traefik/whoami:v1.10
+    container_name: whoami
+    restart: unless-stopped
+    logging: *default-logging
+    networks:
+      - hosting-net
+    deploy:
+      resources:
+        limits:
+          memory: 32m
+          cpus: "0.05"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.whoami.rule=Host(`whoami.${DOMAIN}`)"
+      - "traefik.http.routers.whoami.entrypoints=websecure"
+      - "traefik.http.routers.whoami.tls.certresolver=letsencrypt"
+      - "traefik.http.services.whoami.loadbalancer.server.port=80"
+    profiles:
+      - debug

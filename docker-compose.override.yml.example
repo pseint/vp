@@ -1,0 +1,49 @@
+# =============================================================
+# DOCKER COMPOSE OVERRIDE — Modo desarrollo/debug
+# Copiar a docker-compose.override.yml para activar
+# cp docker-compose.override.yml.example docker-compose.override.yml
+# =============================================================
+
+# AVISO: NO usar en producción. Solo para desarrollo local.
+
+services:
+  # PHP con debug activado
+  php-fpm:
+    # NOTA: El Dockerfile PHP necesita soporte Xdebug para usar este override.
+    # Añade al Dockerfile: RUN pecl install xdebug && docker-php-ext-enable xdebug
+    build:
+      context: ./php
+      args:
+        - XDEBUG=1
+    volumes:
+      - ./php/debug.ini:/usr/local/etc/php/conf.d/99-debug.ini:ro
+    environment:
+      - PHP_IDE_CONFIG=serverName=hosting-local
+      - XDEBUG_MODE=debug
+      - XDEBUG_CONFIG=client_host=host.docker.internal client_port=9003
+    deploy:
+      resources:
+        limits:
+          memory: 1g  # Más memoria para debug
+
+  # Traefik con log level DEBUG
+  traefik:
+    command:
+      - "--log.level=DEBUG"
+      - "--api.insecure=true"  # Dashboard sin auth para debug
+    ports:
+      - "8080:8080"
+
+  # MariaDB expuesto para conexión desde host (desarrollo)
+  mariadb:
+    ports:
+      - "127.0.0.1:3306:3306"  # Solo localhost
+
+  # Redis expuesto para debug desde host
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"  # Solo localhost
+
+  # Whoami activado para pruebas
+  whoami:
+    profiles: []  # Elimina el profile para que siempre arranque

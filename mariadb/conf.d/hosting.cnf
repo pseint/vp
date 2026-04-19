@@ -1,0 +1,80 @@
+# =============================================================
+# MARIADB — Configuración optimizada para Oracle Free ARM64
+# Archivo: /opt/hosting/mariadb/conf.d/hosting.cnf
+# Ajustado para 512MB RAM límite Docker con buffer mínimo
+# =============================================================
+
+[mysqld]
+# ── Básico ────────────────────────────────────────────────────
+character-set-server        = utf8mb4
+collation-server            = utf8mb4_unicode_ci
+default-storage-engine      = InnoDB
+skip-name-resolve           = ON
+max_allowed_packet          = 256M
+max_connections             = 100
+wait_timeout                = 300
+interactive_timeout         = 300
+event_scheduler             = OFF
+# Prevenir lectura de archivos locales via SQL (seguridad)
+local_infile                = OFF
+secure_file_priv            = /var/lib/mysql
+
+# ── InnoDB (optimizado para poca RAM) ─────────────────────────
+innodb_buffer_pool_size     = 256M
+# FIX: chunk_size debe ser divisor de buffer_pool_size para evitar warning al arrancar
+# 256M / 128M = 2 instancias → sin warning "innodb_buffer_pool_size not a multiple of..."
+innodb_buffer_pool_chunk_size = 128M
+innodb_buffer_pool_instances = 1
+innodb_log_file_size        = 64M
+innodb_log_buffer_size      = 16M
+innodb_flush_log_at_trx_commit = 2
+innodb_flush_method         = O_DIRECT
+# NVMe: desactivar doublewrite mejora rendimiento ~10% (SSD fiable, no HDD)
+innodb_doublewrite          = OFF
+# FIX: Oracle Free Tier usa NVMe SSD — 200 es para HDD. NVMe soporta 400/800+
+innodb_io_capacity          = 400
+innodb_io_capacity_max      = 800
+innodb_read_io_threads      = 2
+innodb_write_io_threads     = 2
+innodb_file_per_table       = ON
+
+# ── Cache y buffers ───────────────────────────────────────────
+query_cache_size            = 0
+query_cache_type            = 0
+table_open_cache            = 400
+table_definition_cache      = 400
+tmp_table_size              = 32M
+max_heap_table_size         = 32M
+sort_buffer_size            = 2M
+read_buffer_size            = 1M
+read_rnd_buffer_size        = 1M
+join_buffer_size            = 1M
+
+# ── Logs ──────────────────────────────────────────────────────
+slow_query_log              = ON
+slow_query_log_file         = /var/lib/mysql/slow.log
+long_query_time             = 2
+log_queries_not_using_indexes = OFF
+general_log                 = OFF
+
+# ── Seguridad ─────────────────────────────────────────────────
+# symbolic-links eliminado: MariaDB 11.x lo deshabilita por defecto y
+# el parámetro genera deprecation warning en logs al arrancar
+
+# ── Binlog (para backups incrementales) ──────────────────────
+log-bin                     = /var/lib/mysql/mysql-bin
+binlog_expire_logs_seconds  = 86400   # 1 día — expire_logs_days deprecado en MariaDB 11.x
+max_binlog_size             = 100M
+binlog_format               = ROW
+# FIX v16: NONE evita calcular CRC32 en cada evento del binlog
+# En servidor único (sin replicación) es puro overhead de CPU sin beneficio
+binlog_checksum             = NONE
+
+# ── Performance Schema (desactivar para ahorrar RAM) ──────────
+performance_schema          = OFF
+
+[client]
+default-character-set       = utf8mb4
+
+[mysql]
+default-character-set       = utf8mb4

@@ -1,0 +1,66 @@
+# =============================================================
+# .gitignore — Oracle VPS Hosting
+# =============================================================
+
+# ── Secretos — NUNCA subir al repositorio ─────────────────────
+.env
+traefik/dynamic/.htpasswd
+traefik/acme/
+traefik/acme/*.json
+
+# ── Logs ──────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Datos de sitios ───────────────────────────────────────────
+data/
+nginx/sites-enabled/
+# Mantener el directorio pero ignorar su contenido:
+!nginx/sites-enabled/.gitkeep
+
+# ── DNS config con passwords ──────────────────────────────────
+# pdns.conf puede contener la password si se reemplazó
+# Usa pdns.conf.example en su lugar
+dns/pdns.conf
+
+# ── PHP ini con Redis password ────────────────────────────────
+# php.ini puede contener passwords tras setup-env.sh
+php/php.ini
+
+# ── Redis con password ────────────────────────────────────────
+redis/redis.conf
+
+# ── MariaDB init con passwords ────────────────────────────────
+mariadb/init/01-init.sql
+
+# ── Override de desarrollo ────────────────────────────────────
+docker-compose.override.yml
+
+# ── OS y editores ─────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.iml
+
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ── Backups temporales ────────────────────────────────────────
+*.bak
+*.backup
+*.old
+*.orig
+/tmp/
+
+# ── Archivo generado por restore.sh ─────────────────────────
+.env.restored

@@ -1,0 +1,92 @@
+# =============================================================
+# FAIL2BAN — Jails para Oracle VPS Hosting
+# Instalar via install.sh (reemplaza INSTALL_DIR automáticamente)
+# =============================================================
+
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+ignoreip = 127.0.0.1/8 ::1 172.16.0.0/12 10.0.0.0/8 192.168.0.0/16
+backend  = auto
+# Ubuntu 24.04 usa nftables por defecto (iptables es un wrapper sobre nftables)
+# Si fail2ban falla con iptables, cambia a: banaction = nftables-multiport
+banaction = iptables-multiport
+banaction_allports = iptables-allports
+# banaction = nftables-multiport
+# banaction_allports = nftables-allports
+
+# ── SSH ───────────────────────────────────────────────────────
+[sshd]
+enabled  = true
+backend  = systemd
+port     = ssh
+logpath  = %(sshd_log)s
+maxretry = 4
+bantime  = 6h
+
+# ── Nginx — Rate limit (429 en masa) ─────────────────────────
+[nginx-limit-req]
+enabled  = true
+port     = http,https
+filter   = nginx-limit-req
+logpath  = INSTALL_DIR/logs/nginx/access.log
+           INSTALL_DIR/logs/nginx/*.access.log
+maxretry = 20
+findtime = 2m
+bantime  = 30m
+
+# ── Nginx — Escáneres de vulnerabilidades ─────────────────────
+[nginx-forbidden]
+enabled  = true
+port     = http,https
+filter   = nginx-forbidden
+logpath  = INSTALL_DIR/logs/nginx/access.log
+           INSTALL_DIR/logs/nginx/*.access.log
+maxretry = 15
+findtime = 5m
+bantime  = 2h
+
+# ── Nginx — Exploits e inyecciones ───────────────────────────
+[nginx-exploit]
+enabled  = true
+port     = http,https
+filter   = nginx-exploit
+logpath  = INSTALL_DIR/logs/nginx/access.log
+           INSTALL_DIR/logs/nginx/*.access.log
+maxretry = 3
+findtime = 5m
+bantime  = 24h
+
+# ── Traefik — Dashboard no autorizados ────────────────────────
+# FIX 17: Traefik usa JSON logs — filter personalizado traefik-auth
+# (no apache-auth que espera formato Apache)
+[traefik-auth]
+enabled  = true
+port     = 8080,8443
+filter   = traefik-auth
+logpath  = INSTALL_DIR/logs/traefik/access.log
+maxretry = 5
+bantime  = 1h
+
+# ── SFTPGo — Intentos de login fallidos ──────────────────────
+[sftpgo]
+# Logs montados en: ./logs/sftpgo/sftpgo.log (via docker-compose + SFTPGO_LOG_FILE_PATH)
+enabled  = true
+port     = 2022
+filter   = sftpgo
+logpath  = INSTALL_DIR/logs/sftpgo/sftpgo.log
+maxretry = 5
+bantime  = 1h
+
+# ── PowerDNS — Flood de consultas DNS ────────────────────────
+[powerdns-flood]
+# Activar con cuidado — puede banear IPs legítimas con mucho tráfico DNS
+enabled  = false
+port     = 53
+protocol = udp
+filter   = powerdns
+logpath  = /var/log/syslog
+maxretry = 100
+findtime = 1m
+bantime  = 10m
